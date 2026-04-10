@@ -191,14 +191,20 @@
         <div class="text-xs opacity-70 mb-2">總計支出</div>
         <div class="flex justify-between items-end">
           <div>
-            <div class="text-2xl font-light" id="total-twd">¥0</div>
-            <div class="text-xs opacity-60" id="total-jpy">NT$0</div>
+            <div class="text-2xl font-light" id="total-twd">NT$0</div>
+            <div class="text-xs opacity-60" id="total-jpy">¥0</div>
           </div>
           <button onclick="openAddRecord()" class="px-4 py-2 rounded-xl text-sm font-medium link-btn"
             style="background:rgba(255,255,255,0.15);backdrop-filter:blur(4px);">
             <i class="fa-solid fa-plus mr-1"></i>新增
           </button>
         </div>
+      </div>
+
+      <!-- Category breakdown -->
+      <div class="bg-card rounded-2xl p-4 travel-card" id="category-breakdown" style="display:none;">
+        <h3 class="text-sm font-semibold text-charcoal mb-3" style="font-family:'Noto Sans TC',sans-serif;">各類別消費</h3>
+        <div id="category-breakdown-list" class="space-y-2"></div>
       </div>
 
       <!-- Records list -->
@@ -470,6 +476,25 @@
   </div>
 </div>
 
+<!-- ===== EDIT DAY MODAL ===== -->
+<div id="modal-day" class="modal-overlay hidden" onclick="if(event.target===this)closeModal('modal-day')">
+  <div class="modal-sheet">
+    <div class="flex items-center justify-between mb-4">
+      <h3 class="font-semibold text-charcoal" style="font-family:'Noto Sans TC',sans-serif;">編輯日期</h3>
+      <button onclick="closeModal('modal-day')" class="text-stone"><i class="fa-solid fa-xmark text-lg"></i></button>
+    </div>
+    <div class="space-y-3">
+      <div>
+        <label class="text-xs text-stone block mb-1">日期</label>
+        <input id="edit-day-date" type="date" class="w-full border rounded-xl px-3 py-2.5 text-sm" style="border-color:#E8E4E0;color:#4E4848;">
+      </div>
+    </div>
+    <input type="hidden" id="edit-day-index">
+    <button onclick="saveDay()" class="w-full mt-4 py-3 rounded-xl text-sm font-medium text-white link-btn"
+      style="background:#C97D60;">儲存</button>
+  </div>
+</div>
+
 <!-- Toast -->
 <div id="toast" class="fixed top-5 left-1/2 -translate-x-1/2 z-50 hidden transition-all">
   <div class="px-4 py-2.5 rounded-full text-sm text-white shadow-lg" id="toast-inner" style="background:#4E4848;font-family:'Noto Sans TC',sans-serif;"></div>
@@ -714,10 +739,13 @@ function renderPlanContent() {
     const dayHeader = `
       <div class="flex items-center justify-between mb-3">
         <div class="flex items-center gap-2">
-          <div class="text-sm font-semibold" style="color:${isToday ? '#C97D60' : '#4E4848'};font-family:'Noto Sans TC',sans-serif;">
-            Day ${dayIdx + 1} · ${formatDate(d)}
-            ${isToday ? '<span class="ml-1 text-xs px-1.5 py-0.5 rounded-full" style="background:#F0E6E0;color:#C97D60;">今天</span>' : ''}
-          </div>
+          <button onclick="openEditDay(${dayIdx})" class="text-left">
+            <div class="text-sm font-semibold" style="color:${isToday ? '#C97D60' : '#4E4848'};font-family:'Noto Sans TC',sans-serif;">
+              Day ${dayIdx + 1} · ${formatDate(d)}
+              ${isToday ? '<span class="ml-1 text-xs px-1.5 py-0.5 rounded-full" style="background:#F0E6E0;color:#C97D60;">今天</span>' : ''}
+              <i class="fa-solid fa-pen" style="color:#A89F94;font-size:9px;margin-left:3px;"></i>
+            </div>
+          </button>
         </div>
         <div class="flex gap-1">
           <button onclick="openAddEvent(${dayIdx})" class="text-xs px-2 py-1 rounded-lg link-btn" style="background:#F0EDE9;color:#4E4848;">
@@ -784,30 +812,53 @@ function renderPlanContent() {
 }
 
 function addDay() {
-  // Auto-calculate next date
   let nextDate = '';
   if (appData.days.length > 0) {
     const last = appData.days[appData.days.length - 1].date;
-    const d = new Date(last + 'T00:00:00');
+    const d = new Date(last + 'T00:00:00'); // 強制本地時間解析
     d.setDate(d.getDate() + 1);
-    nextDate = d.toISOString().split('T')[0];
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    nextDate = `${y}-${m}-${day}`;
   } else if (appData.tripStart) {
     nextDate = appData.tripStart;
   } else {
     nextDate = todayStr();
   }
+
   appData.days.push({ date: nextDate, events: [] });
   markDirty();
   renderDayTabs();
   renderPlanContent();
-  // Scroll to new day
+  // 開啟日期編輯 modal 讓使用者可以調整
   setTimeout(() => {
-    const el = document.getElementById('day-' + (appData.days.length - 1));
+    const idx = appData.days.length - 1;
+    const el = document.getElementById('day-' + idx);
     if (el) el.scrollIntoView({ behavior: 'smooth' });
-  }, 100);
+    openEditDay(idx);
+  }, 150);
 }
 
-function deleteDay(idx) {
+function openEditDay(idx) {
+  const day = appData.days[idx];
+  document.getElementById('edit-day-index').value = idx;
+  document.getElementById('edit-day-date').value = day.date || '';
+  document.getElementById('modal-day').classList.remove('hidden');
+}
+
+function saveDay() {
+  const idx = parseInt(document.getElementById('edit-day-index').value);
+  const date = document.getElementById('edit-day-date').value;
+  if (!date) { showToast('請選擇日期'); return; }
+  appData.days[idx].date = date;
+  markDirty();
+  renderDayTabs();
+  renderPlanContent();
+  closeModal('modal-day');
+}
+
+
   if (!confirm(`確定刪除 Day ${idx+1} 的所有行程？`)) return;
   appData.days.splice(idx, 1);
   markDirty();
@@ -1006,19 +1057,69 @@ function renderRecords() {
 function updateWalletTotals() {
   const rate = appData.exchangeRate || 0.217;
   let totalJpy = 0, totalTwd = 0;
+  const catTotals = {}; // { cat: { twd, jpy } }
+  const catEmoji = { '餐飲':'🍜','交通':'🚇','住宿':'🏨','購物':'🛍','景點':'🎌','其他':'📦' };
+
   appData.records.forEach(r => {
+    let inTwd = 0, inJpy = 0;
     if (r.currency === 'JPY') {
-      totalJpy += r.amount;
-      totalTwd += r.amount * rate;
+      inJpy = r.amount;
+      inTwd = r.amount * rate;
     } else {
-      totalTwd += r.amount;
-      totalJpy += r.amount / rate;
+      inTwd = r.amount;
+      inJpy = r.amount / rate;
     }
+    totalJpy += inJpy;
+    totalTwd += inTwd;
+
+    const cat = r.category || '其他';
+    if (!catTotals[cat]) catTotals[cat] = { twd: 0, jpy: 0 };
+    catTotals[cat].twd += inTwd;
+    catTotals[cat].jpy += inJpy;
   });
+
   const twdEl = document.getElementById('total-twd');
   const jpyEl = document.getElementById('total-jpy');
   if (twdEl) twdEl.textContent = 'NT$' + Math.round(totalTwd).toLocaleString();
   if (jpyEl) jpyEl.textContent = '¥' + Math.round(totalJpy).toLocaleString();
+
+  // Category breakdown
+  const breakdownEl = document.getElementById('category-breakdown');
+  const listEl = document.getElementById('category-breakdown-list');
+  if (!breakdownEl || !listEl) return;
+
+  const cats = Object.keys(catTotals);
+  if (cats.length === 0) {
+    breakdownEl.style.display = 'none';
+    return;
+  }
+  breakdownEl.style.display = 'block';
+
+  // Sort by twd descending
+  cats.sort((a, b) => catTotals[b].twd - catTotals[a].twd);
+  const maxTwd = catTotals[cats[0]].twd;
+
+  listEl.innerHTML = cats.map(cat => {
+    const t = catTotals[cat];
+    const pct = maxTwd > 0 ? Math.round((t.twd / totalTwd) * 100) : 0;
+    const barWidth = maxTwd > 0 ? Math.round((t.twd / maxTwd) * 100) : 0;
+    return `
+      <div class="space-y-1">
+        <div class="flex items-center justify-between">
+          <div class="flex items-center gap-2">
+            <span class="text-sm">${catEmoji[cat] || '📦'}</span>
+            <span class="text-xs text-charcoal" style="font-family:'Noto Sans TC',sans-serif;">${cat}</span>
+          </div>
+          <div class="text-right">
+            <span class="text-xs font-medium text-charcoal">NT$${Math.round(t.twd).toLocaleString()}</span>
+            <span class="text-xs text-stone ml-1">${pct}%</span>
+          </div>
+        </div>
+        <div class="h-1.5 rounded-full" style="background:#F0EDE9;">
+          <div class="h-1.5 rounded-full" style="background:#C97D60;width:${barWidth}%;transition:width 0.4s;"></div>
+        </div>
+      </div>`;
+  }).join('');
 }
 
 // ==================== LISTS ====================
@@ -1178,7 +1279,11 @@ function importData(event) {
 
 // ==================== HELPERS ====================
 function todayStr() {
-  return new Date().toISOString().split('T')[0];
+  const d = new Date();
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
 }
 
 function formatDate(d) {
