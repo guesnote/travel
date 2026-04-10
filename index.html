@@ -859,6 +859,7 @@ function saveDay() {
 }
 
 
+function deleteDay(idx) {
   if (!confirm(`確定刪除 Day ${idx+1} 的所有行程？`)) return;
   appData.days.splice(idx, 1);
   markDirty();
