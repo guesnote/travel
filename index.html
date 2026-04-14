@@ -407,7 +407,7 @@
 <div id="modal-record" class="modal-overlay hidden" onclick="if(event.target===this)closeModal('modal-record')">
   <div class="modal-sheet">
     <div class="flex items-center justify-between mb-4">
-      <h3 class="font-semibold text-charcoal" style="font-family:'Noto Sans TC',sans-serif;">新增消費</h3>
+      <h3 class="font-semibold text-charcoal" style="font-family:'Noto Sans TC',sans-serif;" id="modal-record-title">新增消費</h3>
       <button onclick="closeModal('modal-record')" class="text-stone"><i class="fa-solid fa-xmark text-lg"></i></button>
     </div>
     <div class="space-y-3">
@@ -445,6 +445,7 @@
         <input id="record-note" type="text" placeholder="補充說明..." class="w-full border rounded-xl px-3 py-2.5 text-sm" style="border-color:#E8E4E0;color:#4E4848;">
       </div>
     </div>
+    <input type="hidden" id="record-edit-id" value="">
     <button onclick="saveRecord()" class="w-full mt-4 py-3 rounded-xl text-sm font-medium text-white link-btn"
       style="background:#C97D60;">儲存</button>
   </div>
@@ -763,12 +764,18 @@ function renderPlanContent() {
     if (events.length === 0) {
       eventsHtml = `<div class="text-xs text-stone text-center py-4" style="border:1px dashed #E8E4E0;border-radius:12px;">點擊「＋ 行程」新增活動</div>`;
     } else {
-      eventsHtml = '<div class="space-y-0">';
+      eventsHtml = `<div class="events-list" data-day="${dayIdx}">`;
       events.forEach((ev, evIdx) => {
         const isLast = evIdx === events.length - 1;
         eventsHtml += `
-          <div class="flex gap-3">
-            <div class="flex flex-col items-center" style="width:10px;">
+          <div class="event-item flex gap-2 rounded-xl mb-1 transition-opacity" draggable="true"
+            data-day="${dayIdx}" data-ev="${evIdx}"
+            ondragstart="onDragStart(event)" ondragover="onDragOver(event)"
+            ondrop="onDrop(event)" ondragend="onDragEnd(event)">
+            <div class="flex flex-col items-center pt-1.5 flex-shrink-0" style="width:16px;cursor:grab;">
+              <i class="fa-solid fa-grip-vertical text-xs" style="color:#D4CFC9;"></i>
+            </div>
+            <div class="flex flex-col items-center flex-shrink-0" style="width:10px;">
               <div class="timeline-dot mt-1"></div>
               ${!isLast ? '<div class="timeline-line flex-1 mt-1" style="min-height:32px;"></div>' : ''}
             </div>
@@ -907,8 +914,7 @@ function saveEvent() {
     appData.days[dayIdx].events[editIdx] = ev;
   } else {
     appData.days[dayIdx].events.push(ev);
-    // Sort by time
-    appData.days[dayIdx].events.sort((a,b) => (a.time||'').localeCompare(b.time||''));
+    // 不自動排序，保留手動拖曳順序
   }
   markDirty();
   renderPlanContent();
@@ -920,6 +926,55 @@ function deleteEvent(dayIdx, evIdx) {
   appData.days[dayIdx].events.splice(evIdx, 1);
   markDirty();
   renderPlanContent();
+}
+
+// ==================== DRAG & DROP ====================
+let dragSrc = null;
+
+function onDragStart(e) {
+  dragSrc = e.currentTarget;
+  e.dataTransfer.effectAllowed = 'move';
+  setTimeout(() => dragSrc.style.opacity = '0.4', 0);
+}
+
+function onDragOver(e) {
+  e.preventDefault();
+  e.dataTransfer.dropEffect = 'move';
+  const target = e.currentTarget;
+  if (target === dragSrc) return;
+  // 視覺提示：目標上方顯示插入線
+  document.querySelectorAll('.event-item').forEach(el => el.style.borderTop = '');
+  target.style.borderTop = '2px solid #C97D60';
+}
+
+function onDrop(e) {
+  e.preventDefault();
+  document.querySelectorAll('.event-item').forEach(el => el.style.borderTop = '');
+  const target = e.currentTarget;
+  if (!dragSrc || target === dragSrc) return;
+
+  const fromDay = parseInt(dragSrc.dataset.day);
+  const fromEv  = parseInt(dragSrc.dataset.ev);
+  const toDay   = parseInt(target.dataset.day);
+  const toEv    = parseInt(target.dataset.ev);
+
+  // 只允許同一天內排序
+  if (fromDay !== toDay) { showToast('只能在同一天內排序'); return; }
+
+  const events = appData.days[fromDay].events;
+  const [moved] = events.splice(fromEv, 1);
+  events.splice(toEv, 0, moved);
+
+  markDirty();
+  renderPlanContent();
+}
+
+function onDragEnd(e) {
+  document.querySelectorAll('.event-item').forEach(el => {
+    el.style.opacity = '';
+    el.style.borderTop = '';
+  });
+  dragSrc = null;
 }
 
 function jumpToToday() {
@@ -969,6 +1024,8 @@ function openAddRecord() {
   document.getElementById('record-currency').value = 'JPY';
   document.getElementById('record-category').value = '';
   document.getElementById('record-note').value = '';
+  document.getElementById('record-edit-id').value = '';
+  document.getElementById('modal-record-title').textContent = '新增消費';
   document.querySelectorAll('.cat-btn').forEach(b => {
     b.style.background = '';
     b.style.color = '#A89F94';
@@ -995,18 +1052,30 @@ function saveRecord() {
   const currency = document.getElementById('record-currency').value;
   const category = document.getElementById('record-category').value;
   const note = document.getElementById('record-note').value.trim();
+  const editId = parseInt(document.getElementById('record-edit-id').value);
   if (!name) { showToast('請輸入品項名稱'); return; }
   if (!amount || isNaN(amount)) { showToast('請輸入金額'); return; }
-  appData.records.unshift({
-    id: Date.now(),
-    name, amount, currency, category, note,
-    ts: new Date().toISOString(),
-  });
+
+  if (editId) {
+    // 編輯模式
+    const idx = appData.records.findIndex(r => r.id === editId);
+    if (idx >= 0) {
+      appData.records[idx] = { ...appData.records[idx], name, amount, currency, category, note };
+    }
+    showToast('消費已更新');
+  } else {
+    // 新增模式
+    appData.records.unshift({
+      id: Date.now(),
+      name, amount, currency, category, note,
+      ts: new Date().toISOString(),
+    });
+    showToast('消費已記錄');
+  }
   markDirty();
   renderRecords();
   updateWalletTotals();
   closeModal('modal-record');
-  showToast('消費已記錄');
 }
 
 function deleteRecord(id) {
@@ -1014,6 +1083,27 @@ function deleteRecord(id) {
   markDirty();
   renderRecords();
   updateWalletTotals();
+}
+
+function openEditRecord(id) {
+  const r = appData.records.find(r => r.id === id);
+  if (!r) return;
+  document.getElementById('record-name').value = r.name || '';
+  document.getElementById('record-amount').value = r.amount || '';
+  document.getElementById('record-currency').value = r.currency || 'JPY';
+  document.getElementById('record-note').value = r.note || '';
+  document.getElementById('record-category').value = r.category || '';
+  // 重設類別按鈕
+  document.querySelectorAll('.cat-btn').forEach(b => {
+    const cat = b.textContent.trim().replace(/^[^\s]+\s/,'');
+    const isSelected = cat === r.category;
+    b.style.background = isSelected ? '#F0E6E0' : '';
+    b.style.color = isSelected ? '#C97D60' : '#A89F94';
+    b.style.borderColor = isSelected ? '#C97D60' : '#E8E4E0';
+  });
+  document.getElementById('record-edit-id').value = id;
+  document.getElementById('modal-record-title').textContent = '編輯消費';
+  document.getElementById('modal-record').classList.remove('hidden');
 }
 
 function renderRecords() {
@@ -1049,9 +1139,14 @@ function renderRecords() {
           `<div class="text-xs text-stone">≈ NT$${Math.round(r.amount * (appData.exchangeRate || 0.217))}</div>` :
           `<div class="text-xs text-stone">≈ ¥${Math.round(r.amount / (appData.exchangeRate || 0.217))}</div>`}
       </div>
-      <button onclick="deleteRecord(${r.id})" class="text-stone ml-1 link-btn">
-        <i class="fa-solid fa-xmark text-xs"></i>
-      </button>
+      <div class="flex flex-col gap-1 flex-shrink-0">
+        <button onclick="openEditRecord(${r.id})" class="link-btn" style="color:#A89F94;">
+          <i class="fa-solid fa-pen text-xs"></i>
+        </button>
+        <button onclick="deleteRecord(${r.id})" class="link-btn" style="color:#D4CFC9;">
+          <i class="fa-solid fa-xmark text-xs"></i>
+        </button>
+      </div>
     </div>`).join('');
 }
 
