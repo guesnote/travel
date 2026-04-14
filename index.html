@@ -771,9 +771,10 @@ function renderPlanContent() {
           <div class="event-item flex gap-2 rounded-xl mb-1 transition-opacity" draggable="true"
             data-day="${dayIdx}" data-ev="${evIdx}"
             ondragstart="onDragStart(event)" ondragover="onDragOver(event)"
-            ondrop="onDrop(event)" ondragend="onDragEnd(event)">
-            <div class="flex flex-col items-center pt-1.5 flex-shrink-0" style="width:16px;cursor:grab;">
-              <i class="fa-solid fa-grip-vertical text-xs" style="color:#D4CFC9;"></i>
+            ondrop="onDrop(event)" ondragend="onDragEnd(event)"
+            ontouchstart="onTouchStart(event)" ontouchmove="onTouchMove(event)" ontouchend="onTouchEnd(event)">
+            <div class="grip-handle flex flex-col items-center pt-1.5 flex-shrink-0" style="width:20px;cursor:grab;touch-action:none;padding:4px;">
+              <i class="fa-solid fa-grip-vertical text-xs" style="color:#D4CFC9;pointer-events:none;"></i>
             </div>
             <div class="flex flex-col items-center flex-shrink-0" style="width:10px;">
               <div class="timeline-dot mt-1"></div>
@@ -928,13 +929,17 @@ function deleteEvent(dayIdx, evIdx) {
   renderPlanContent();
 }
 
-// ==================== DRAG & DROP ====================
+// ==================== DRAG & DROP (Mouse + Touch) ====================
 let dragSrc = null;
+let touchClone = null;
+let touchOffsetX = 0;
+let touchOffsetY = 0;
 
+// --- Mouse events ---
 function onDragStart(e) {
   dragSrc = e.currentTarget;
   e.dataTransfer.effectAllowed = 'move';
-  setTimeout(() => dragSrc.style.opacity = '0.4', 0);
+  setTimeout(() => { if (dragSrc) dragSrc.style.opacity = '0.4'; }, 0);
 }
 
 function onDragOver(e) {
@@ -942,7 +947,6 @@ function onDragOver(e) {
   e.dataTransfer.dropEffect = 'move';
   const target = e.currentTarget;
   if (target === dragSrc) return;
-  // 視覺提示：目標上方顯示插入線
   document.querySelectorAll('.event-item').forEach(el => el.style.borderTop = '');
   target.style.borderTop = '2px solid #C97D60';
 }
@@ -952,21 +956,7 @@ function onDrop(e) {
   document.querySelectorAll('.event-item').forEach(el => el.style.borderTop = '');
   const target = e.currentTarget;
   if (!dragSrc || target === dragSrc) return;
-
-  const fromDay = parseInt(dragSrc.dataset.day);
-  const fromEv  = parseInt(dragSrc.dataset.ev);
-  const toDay   = parseInt(target.dataset.day);
-  const toEv    = parseInt(target.dataset.ev);
-
-  // 只允許同一天內排序
-  if (fromDay !== toDay) { showToast('只能在同一天內排序'); return; }
-
-  const events = appData.days[fromDay].events;
-  const [moved] = events.splice(fromEv, 1);
-  events.splice(toEv, 0, moved);
-
-  markDirty();
-  renderPlanContent();
+  doReorder(dragSrc, target);
 }
 
 function onDragEnd(e) {
@@ -975,6 +965,89 @@ function onDragEnd(e) {
     el.style.borderTop = '';
   });
   dragSrc = null;
+}
+
+// --- Touch events ---
+function onTouchStart(e) {
+  // 只有點到 grip icon 才觸發拖曳，避免干擾一般點擊
+  if (!e.target.closest('.grip-handle')) return;
+  e.preventDefault();
+  dragSrc = e.currentTarget;
+  dragSrc.style.opacity = '0.4';
+
+  const touch = e.touches[0];
+  const rect = dragSrc.getBoundingClientRect();
+  touchOffsetX = touch.clientX - rect.left;
+  touchOffsetY = touch.clientY - rect.top;
+
+  // 建立跟隨手指的視覺分身
+  touchClone = dragSrc.cloneNode(true);
+  touchClone.style.cssText = `
+    position: fixed; z-index: 9999; pointer-events: none;
+    width: ${rect.width}px; opacity: 0.85;
+    background: white; border-radius: 12px;
+    box-shadow: 0 8px 24px rgba(78,72,72,0.18);
+    left: ${touch.clientX - touchOffsetX}px;
+    top: ${touch.clientY - touchOffsetY}px;
+  `;
+  document.body.appendChild(touchClone);
+}
+
+function onTouchMove(e) {
+  if (!dragSrc) return;
+  e.preventDefault();
+  const touch = e.touches[0];
+
+  // 移動分身
+  if (touchClone) {
+    touchClone.style.left = (touch.clientX - touchOffsetX) + 'px';
+    touchClone.style.top  = (touch.clientY - touchOffsetY) + 'px';
+  }
+
+  // 找出目前手指下方的 event-item
+  if (touchClone) touchClone.style.display = 'none';
+  const el = document.elementFromPoint(touch.clientX, touch.clientY);
+  if (touchClone) touchClone.style.display = '';
+
+  const target = el ? el.closest('.event-item') : null;
+  document.querySelectorAll('.event-item').forEach(ev => ev.style.borderTop = '');
+  if (target && target !== dragSrc) {
+    target.style.borderTop = '2px solid #C97D60';
+  }
+}
+
+function onTouchEnd(e) {
+  if (!dragSrc) return;
+  const touch = e.changedTouches[0];
+
+  // 清除分身
+  if (touchClone) { touchClone.remove(); touchClone = null; }
+  document.querySelectorAll('.event-item').forEach(el => {
+    el.style.borderTop = '';
+    el.style.opacity = '';
+  });
+
+  // 找放開位置的目標
+  const el = document.elementFromPoint(touch.clientX, touch.clientY);
+  const target = el ? el.closest('.event-item') : null;
+  if (target && target !== dragSrc) {
+    doReorder(dragSrc, target);
+  }
+  dragSrc = null;
+}
+
+// --- 共用排序邏輯 ---
+function doReorder(srcEl, targetEl) {
+  const fromDay = parseInt(srcEl.dataset.day);
+  const fromEv  = parseInt(srcEl.dataset.ev);
+  const toDay   = parseInt(targetEl.dataset.day);
+  const toEv    = parseInt(targetEl.dataset.ev);
+  if (fromDay !== toDay) { showToast('只能在同一天內排序'); return; }
+  const events = appData.days[fromDay].events;
+  const [moved] = events.splice(fromEv, 1);
+  events.splice(toEv, 0, moved);
+  markDirty();
+  renderPlanContent();
 }
 
 function jumpToToday() {
