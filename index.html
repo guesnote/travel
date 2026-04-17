@@ -526,6 +526,7 @@ function init() {
   loadLocal();
   renderAll();
   updateSyncUI();
+  initTouchDrag();
   if (appData.apiUrl) {
     pullFromSheets();
   }
@@ -626,10 +627,15 @@ async function syncNow() {
     const payload = { ...appData };
     delete payload.apiUrl;
 
-    // 使用 GET + payload 參數（避免 CORS preflight 問題）
-    const encoded = encodeURIComponent(JSON.stringify({ action: 'save', data: payload }));
-    const url = appData.apiUrl + '?action=save&payload=' + encoded;
-    const res = await fetch(url, { redirect: 'follow' });
+    const body = new URLSearchParams();
+    body.append('action', 'save');
+    body.append('payload', JSON.stringify({ action: 'save', data: payload }));
+
+    const res = await fetch(appData.apiUrl, {
+      method: 'POST',
+      body: body,
+      redirect: 'follow',
+    });
     if (!res.ok) throw new Error('HTTP ' + res.status);
     const result = await res.json();
     if (result && result.success) {
@@ -644,6 +650,7 @@ async function syncNow() {
   } catch(e) {
     updateSyncDot('error');
     showToast('同步失敗，資料已保存在本機');
+    console.error('sync error:', e);
   }
 }
 
@@ -926,22 +933,17 @@ function saveEvent() {
 function deleteEvent(dayIdx, evIdx) {
   appData.days[dayIdx].events.splice(evIdx, 1);
   markDirty();
-  renderPlanContent();
-}
-
 // ==================== DRAG & DROP (Mouse + Touch) ====================
 let dragSrc = null;
 let touchClone = null;
-let touchOffsetX = 0;
-let touchOffsetY = 0;
+let touchOffsetX = 0, touchOffsetY = 0;
 
-// --- Mouse events ---
+// ---- Mouse Drag ----
 function onDragStart(e) {
   dragSrc = e.currentTarget;
   e.dataTransfer.effectAllowed = 'move';
   setTimeout(() => { if (dragSrc) dragSrc.style.opacity = '0.4'; }, 0);
 }
-
 function onDragOver(e) {
   e.preventDefault();
   e.dataTransfer.dropEffect = 'move';
@@ -950,7 +952,6 @@ function onDragOver(e) {
   document.querySelectorAll('.event-item').forEach(el => el.style.borderTop = '');
   target.style.borderTop = '2px solid #C97D60';
 }
-
 function onDrop(e) {
   e.preventDefault();
   document.querySelectorAll('.event-item').forEach(el => el.style.borderTop = '');
@@ -958,7 +959,6 @@ function onDrop(e) {
   if (!dragSrc || target === dragSrc) return;
   doReorder(dragSrc, target);
 }
-
 function onDragEnd(e) {
   document.querySelectorAll('.event-item').forEach(el => {
     el.style.opacity = '';
@@ -967,86 +967,75 @@ function onDragEnd(e) {
   dragSrc = null;
 }
 
-// --- Touch events ---
-function onTouchStart(e) {
-  // 只有點到 grip icon 才觸發拖曳，避免干擾一般點擊
-  if (!e.target.closest('.grip-handle')) return;
-  e.preventDefault();
-  dragSrc = e.currentTarget;
-  dragSrc.style.opacity = '0.4';
+// ---- Touch Drag ----
+function initTouchDrag() {
+  document.addEventListener('touchstart', onTouchStart, { passive: false });
+  document.addEventListener('touchmove',  onTouchMove,  { passive: false });
+  document.addEventListener('touchend',   onTouchEnd,   { passive: false });
+}
 
+function onTouchStart(e) {
+  const handle = e.target.closest('.drag-handle');
+  if (!handle) return;
+  dragSrc = handle.closest('.event-item');
+  if (!dragSrc) return;
   const touch = e.touches[0];
   const rect = dragSrc.getBoundingClientRect();
   touchOffsetX = touch.clientX - rect.left;
   touchOffsetY = touch.clientY - rect.top;
-
-  // 建立跟隨手指的視覺分身
   touchClone = dragSrc.cloneNode(true);
   touchClone.style.cssText = `
-    position: fixed; z-index: 9999; pointer-events: none;
-    width: ${rect.width}px; opacity: 0.85;
-    background: white; border-radius: 12px;
-    box-shadow: 0 8px 24px rgba(78,72,72,0.18);
-    left: ${touch.clientX - touchOffsetX}px;
-    top: ${touch.clientY - touchOffsetY}px;
-  `;
+    position:fixed;z-index:9999;pointer-events:none;opacity:0.85;
+    width:${rect.width}px;left:${rect.left}px;top:${rect.top}px;
+    background:#fff;border-radius:12px;
+    box-shadow:0 8px 24px rgba(78,72,72,0.18);`;
   document.body.appendChild(touchClone);
+  dragSrc.style.opacity = '0.3';
+  e.preventDefault();
 }
 
 function onTouchMove(e) {
-  if (!dragSrc) return;
+  if (!dragSrc || !touchClone) return;
   e.preventDefault();
   const touch = e.touches[0];
-
-  // 移動分身
-  if (touchClone) {
-    touchClone.style.left = (touch.clientX - touchOffsetX) + 'px';
-    touchClone.style.top  = (touch.clientY - touchOffsetY) + 'px';
-  }
-
-  // 找出目前手指下方的 event-item
-  if (touchClone) touchClone.style.display = 'none';
+  touchClone.style.left = (touch.clientX - touchOffsetX) + 'px';
+  touchClone.style.top  = (touch.clientY - touchOffsetY) + 'px';
+  touchClone.style.display = 'none';
   const el = document.elementFromPoint(touch.clientX, touch.clientY);
-  if (touchClone) touchClone.style.display = '';
-
+  touchClone.style.display = '';
   const target = el ? el.closest('.event-item') : null;
   document.querySelectorAll('.event-item').forEach(ev => ev.style.borderTop = '');
-  if (target && target !== dragSrc) {
-    target.style.borderTop = '2px solid #C97D60';
-  }
+  if (target && target !== dragSrc) target.style.borderTop = '2px solid #C97D60';
 }
 
 function onTouchEnd(e) {
   if (!dragSrc) return;
   const touch = e.changedTouches[0];
-
-  // 清除分身
   if (touchClone) { touchClone.remove(); touchClone = null; }
-  document.querySelectorAll('.event-item').forEach(el => {
-    el.style.borderTop = '';
-    el.style.opacity = '';
+  document.querySelectorAll('.event-item').forEach(ev => {
+    ev.style.borderTop = '';
+    ev.style.opacity = '';
   });
-
-  // 找放開位置的目標
   const el = document.elementFromPoint(touch.clientX, touch.clientY);
   const target = el ? el.closest('.event-item') : null;
-  if (target && target !== dragSrc) {
-    doReorder(dragSrc, target);
-  }
+  if (target && target !== dragSrc) doReorder(dragSrc, target);
   dragSrc = null;
 }
 
-// --- 共用排序邏輯 ---
-function doReorder(srcEl, targetEl) {
-  const fromDay = parseInt(srcEl.dataset.day);
-  const fromEv  = parseInt(srcEl.dataset.ev);
-  const toDay   = parseInt(targetEl.dataset.day);
-  const toEv    = parseInt(targetEl.dataset.ev);
+// ---- 共用排序邏輯 ----
+function doReorder(src, target) {
+  const fromDay = parseInt(src.dataset.day);
+  const fromEv  = parseInt(src.dataset.ev);
+  const toDay   = parseInt(target.dataset.day);
+  const toEv    = parseInt(target.dataset.ev);
   if (fromDay !== toDay) { showToast('只能在同一天內排序'); return; }
   const events = appData.days[fromDay].events;
   const [moved] = events.splice(fromEv, 1);
   events.splice(toEv, 0, moved);
   markDirty();
+  renderPlanContent();
+}
+
   renderPlanContent();
 }
 
